@@ -51,6 +51,7 @@
     #include "net/net_sysview.h"
 #endif
 #include "led.h"
+#include "cmsis-dap/dap_server.h"
 
 #if OPT_CDC_SYSVIEW  ||  OPT_NET_SYSVIEW_SERVER
     #define INCLUDE_SYSVIEW     1
@@ -467,7 +468,7 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
 
     // do operations
     rtt_console_running = true;
-    while (ok  &&  !sw_unlock_requested()) {
+    while (ok) { //  &&  !sw_unlock_requested()) {
         bool probe_rtt_cb;
 
         probe_rtt_cb = true;
@@ -543,6 +544,20 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
             // nothing happens here after some time -> timeout and do a new search
             ok = false;
         }
+
+        if (dap_connected()) {
+            static uint32_t cnt;
+
+            if (sw_unlock_requested()  &&  (++cnt & 0x3f) == 0) {
+//                picoprobe_info("xx %d\n", cnt);
+                break;
+            }
+        }
+        else {
+            if (sw_unlock_requested()) {
+                break;
+            }
+        }
     }
     rtt_console_running = false;
     xTimerStop(timer_rtt_cb_verify, 100);
@@ -584,6 +599,27 @@ void rtt_io_thread(void *ptr)
     for (;;) {
         sw_lock(E_SWLOCK_RTT);
         // post: we have the interface
+
+        if (dap_connected()) {
+//            picoprobe_info("HELLOOOOOOOOOOOOOOOOO\n");
+
+#if 1
+            do {
+                if ( !is_target_ok(0)) {
+                    break;
+                }
+                do_rtt_io(rtt_cb, false);
+//                vTaskDelay(pdMS_TO_TICKS(10));
+            } while ( !sw_unlock_requested());
+#else
+            while ( !sw_unlock_requested()) { //  &&  is_target_ok(0)) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+#endif
+
+            sw_unlock(E_SWLOCK_RTT);
+            continue;
+        }
 
         if ( !target_online) {
             if (g_board_info.prerun_board_config != NULL) {

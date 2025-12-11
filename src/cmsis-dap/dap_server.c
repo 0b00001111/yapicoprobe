@@ -137,6 +137,8 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize)
  * Put all the received data into a stream.  Actual execution is done in dap_task()
  */
 {
+    bool send_event = false;
+
 //    picoprobe_info("rx: %d, %d\n", itf, bufsize);
 
     if (itf != 0) {
@@ -155,18 +157,22 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize)
         }
         else {
             xStreamBufferSend(dap_stream, tmp_buf, n, 0);
+            send_event = true;
         }
 
         bufsize -= n;
     }
 
-    xEventGroupSetBits(dap_events, 0x01);
+    if (send_event) {
+        xEventGroupSetBits(dap_events, 0x01);
+    }
 }   // tud_vendor_rx_cb
 #endif
 
 
 
 #if OPT_CMSIS_DAPV2
+void dap_task(void *ptr)
 /**
  * CMSIS-DAP task.
  * Receive DAP requests, execute them via DAP_ExecuteCommand() and transmit the response.
@@ -182,20 +188,35 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize)
  *   command following.  This is required, because "pyocd list" leads to tool detection without
  *   connect/disconnect and thus otherwise tool detection would be stuck to "pyocd" for the next connection.
  */
-void dap_task(void *ptr)
 {
-    EventBits_t xx;
-
     dap_packet_count = _DAP_PACKET_COUNT_UNKNOWN;
     dap_packet_size  = _DAP_PACKET_SIZE_UNKNOWN;
+
     for (;;) {
-        xx = xEventGroupWaitBits(dap_events, 0x01, pdTRUE, pdFALSE, pdMS_TO_TICKS(100));
+        EventBits_t ev = xEventGroupWaitBits(dap_events, 0x01, pdTRUE, pdFALSE,
+                                             swd_connected ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(100));
 //        picoprobe_info("vvvv %d\n", xx);
 
         size_t n = xStreamBufferBytesAvailable(dap_stream);
         n = MIN(n, sizeof(RxDataBuffer) - rx_len);
         xStreamBufferReceive(dap_stream, RxDataBuffer + rx_len, n, 0);
         rx_len += n;
+
+        if (rx_len == 0  &&  ev == 0) {
+            if (swd_connected) {
+                sw_unlock(E_SWLOCK_DAPV2);
+
+//                picoprobe_error("!!!!!!!!! unlock\n");
+                do {
+                    ev = xEventGroupWaitBits(dap_events, 0x01, pdTRUE, pdFALSE, pdMS_TO_TICKS(100));
+                    n = xStreamBufferBytesAvailable(dap_stream);
+                } while (n == 0  &&  ev == 0);
+//                picoprobe_error("!!!!!!!!! lock again\n");
+
+                sw_lock(E_SWLOCK_DAPV2);
+            }
+            continue;
+        }
 
         for (;;) {
             if (rx_len == 0) {
@@ -209,7 +230,7 @@ void dap_task(void *ptr)
             }
 
             if (rx_len != request_len) {
-                picoprobe_error("!!!!!!!!! %d != %d\n", request_len, rx_len);
+                picoprobe_error("!!!!!!!!! %d != %d\n", (int)request_len, (int)rx_len);
             }
 
             //
@@ -468,12 +489,15 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
             led_state(LS_DAPV1_CONNECTED);
         }
     }
-    if (RxDataBuffer[0] == ID_DAP_Disconnect  ||  RxDataBuffer[0] == ID_DAP_Info  ||  RxDataBuffer[0] == ID_DAP_HostStatus) {
+    if (RxDataBuffer[0] == ID_DAP_Disconnect) {
         hid_swd_disconnect_requested = true;
 
         // this is the minimum version which should always work
         dap_packet_count = _DAP_PACKET_COUNT_HID;
         dap_packet_size  = _DAP_PACKET_SIZE_HID;
+    }
+    else if (RxDataBuffer[0] == ID_DAP_Info  ||  RxDataBuffer[0] == ID_DAP_HostStatus) {
+        // ignore
     }
     else {
         hid_swd_disconnect_requested = false;
@@ -512,6 +536,22 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     }
 }   // tud_hid_set_report_cb
 #endif
+
+
+
+bool dap_connected(void)
+{
+    bool r = false;
+
+#if OPT_CMSIS_DAPV1
+    r = r || hid_swd_connected;
+#endif
+#if OPT_CMSIS_DAPV1
+    r = r || swd_connected;
+#endif
+
+    return r;
+}   // dap_connected
 
 
 
