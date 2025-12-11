@@ -6,6 +6,7 @@ VERSION_MAJOR        := 1
 VERSION_MINOR        := 25
 
 BUILD_DIR            := _build
+BUILDEE_DIR          := _buildee
 PROJECT              := picoprobe
 
 
@@ -197,28 +198,41 @@ OPENOCD_S := $(OPENOCD_R)/scripts
 DEBUGGEE_CLIB := newlib
 #DEBUGGEE_CLIB := llvm_libc
 
+.PHONY: clean-build-debuggEE
+clean-build-debuggEE:
+	-rm -rf $(BUILDEE_DIR)
+
+
+.PHONY: all-debuggEE
+all-debuggEE:
+	ninja -C $(BUILDEE_DIR) all
+	@echo "--------------------------"
+	@arm-none-eabi-size -Ax $(BUILDEE_DIR)/$(PROJECT).elf | awk '{size=strtonum($$2); addr=strtonum($$3); if (addr>=0x20000000 && addr<0x20040000) ram += size; if (addr>=0x10000000 && addr<0x20000000) rom += size; } END {print "Flash: " rom "  RAM: " ram}'
+	@echo "--------------------------"
+
+
 .PHONY: debuggEE-flash
 debuggEE-flash:
-	$(MAKE) all
-	pyocd flash -f 6M --probe $(DEBUGGER_SERNO) -e auto $(BUILD_DIR)/$(PROJECT).hex
+	$(MAKE) all-debuggEE
+	pyocd flash -f 6M --probe $(DEBUGGER_SERNO) -e auto $(BUILDEE_DIR)/$(PROJECT).hex
 	pyocd reset -f 6M --probe $(DEBUGGER_SERNO)
 	@echo "ok."
 
 .PHONY: debuggEE-flash-openocd
 debuggEE-flash-openocd:
-	$(MAKE) all
+	$(MAKE) all-debuggEE
 	# openocd does much faster flashing
 	$(OPENOCD) -s $(OPENOCD_S) -f interface/cmsis-dap.cfg -f target/rp2350.cfg                                        \
 	           -c "adapter speed 6000; adapter serial $(DEBUGGER_SERNO)"                                              \
-	           -c "program {$(BUILD_DIR)/$(PROJECT).hex}  verify reset; exit;"
+	           -c "program {$(BUILDEE_DIR)/$(PROJECT).hex}  verify reset; exit;"
 	pyocd reset -f 6M --probe $(DEBUGGER_SERNO)
 	@echo "ok."
 
 .PHONY: debuggEE-flash-probe-rs
 debuggEE-flash-probe-rs:
-	$(MAKE) all
-	#probe-rs run      --speed 6000 --probe 2e8a:000c:$(DEBUGGER_SERNO) --rtt-scan-memory $(BUILD_DIR)/$(PROJECT).elf
-	probe-rs download --speed 6000 --probe 2e8a:000c:$(DEBUGGER_SERNO)                   $(BUILD_DIR)/$(PROJECT).elf
+	$(MAKE) all-debuggEE
+	#probe-rs run      --speed 6000 --probe 2e8a:000c:$(DEBUGGER_SERNO) --rtt-scan-memory $(BUILDEE_DIR)/$(PROJECT).elf
+	probe-rs download --speed 6000 --probe 2e8a:000c:$(DEBUGGER_SERNO)                   $(BUILDEE_DIR)/$(PROJECT).elf
 	@echo "ok."
 
 
@@ -238,9 +252,8 @@ debuggEE-reset-probe-rs:
 
 
 .PHONY: cmake-create-debuggEE
-cmake-create-debuggEE: clean-build
-	export PICO_TOOLCHAIN_PATH=~/bin/llvm-arm-none-eabi/bin;                                                           \
-	cmake -B $(BUILD_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=$(PICO_BOARD)                                 \
+cmake-create-debuggEE: clean-build-debuggEE
+	cmake -B $(BUILDEE_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=$(PICO_BOARD)                               \
 	         $(CMAKE_FLAGS)                                                                                            \
 	         -DPICO_CLIB=$(DEBUGGEE_CLIB)                                                                              \
 	         -DOPT_NET=NCM -DOPT_PROBE_DEBUG_OUT=RTT                                                                   \
@@ -249,7 +262,6 @@ cmake-create-debuggEE: clean-build
 
 .PHONY: cmake-create-debugger
 cmake-create-debugger: clean-build
-	export PICO_TOOLCHAIN_PATH=~/bin/llvm-arm-none-eabi/bin;                                                           \
 	cmake -B $(BUILD_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=$(PICO_BOARD)                               \
 	         $(CMAKE_FLAGS)                                                                                            \
 	         -DPICO_CLIB=newlib                                                                                        \
