@@ -84,17 +84,23 @@
  *          128/8             +/+                     -/+
  *          256/8             X/+                     -/+
  *
- *     - openocd uses full buffer, pyocd only ~400 bytes
- *     - pyocd transmits obscure zero byte during certain flash phases if buffer >= 256
- *     - question is if the tools are using more than one buffer for debugging
+ *     - openocd
+ *       - uses full buffer
+ *       - question is if openocd is using more than one buffer for debugging
+ *     - pyocd
+ *       - only 334 bytes on transmit
+ *       - doing read_ap_multi() emits maximum of 56 requests (so that the request fits into 64 bytes), response has only 227 bytes
+ *       - pyocd transmits obscure zero byte during certain flash phases if buffer >= 256, see https://github.com/pyocd/pyOCD/issues/1871
+ *       - I doubt that pyocd benefits from DAP_PACKET_COUNT > 2, even ==2 is questionable
+ *       - does not use multi buffers for debugging
  *
  */
 #define _DAP_PACKET_COUNT_OPENOCD   1
-#define _DAP_PACKET_SIZE_OPENOCD    512
+#define _DAP_PACKET_SIZE_OPENOCD    1024
 #define _DAP_PACKET_COUNT_PROBERS   2
 #define _DAP_PACKET_SIZE_PROBERS    1024
-#define _DAP_PACKET_COUNT_PYOCD     4
-#define _DAP_PACKET_SIZE_PYOCD      1024
+#define _DAP_PACKET_COUNT_PYOCD     2
+#define _DAP_PACKET_SIZE_PYOCD      512
 #define _DAP_PACKET_COUNT_UNKNOWN   1
 #define _DAP_PACKET_SIZE_UNKNOWN    64
 
@@ -153,7 +159,7 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize)
 
         if (n == 1  &&  tmp_buf[0] == 0  &&  tool == E_DAPTOOL_PYOCD) {
             // this is a special pyocd hack (and of course openocd does not like it)
-            //picoprobe_info("-----------pyocd hack\n");
+//            picoprobe_info("-----------pyocd hack\n");
         }
         else {
             xStreamBufferSend(dap_stream, tmp_buf, n, 0);
@@ -227,7 +233,7 @@ void dap_task(void *ptr)
 
             request_len = DAP_GetCommandLength(RxDataBuffer, rx_len);
             if (rx_len < request_len) {
-                //            picoprobe_error("......... %d > %d\n", request_len, rx_len);
+//                picoprobe_error("......... %d > %d\n", request_len, rx_len);
                 break;
             }
 
@@ -239,7 +245,7 @@ void dap_task(void *ptr)
             // now we have at least one request in the buffer
             //
             last_request_us = time_us_32();
-            //        picoprobe_info("<<<(%ld,%ld) %d %d\n", request_len, rx_len, RxDataBuffer[0], RxDataBuffer[1]);
+//            picoprobe_info("<<<(%ld,%ld) %d %d\n", request_len, rx_len, RxDataBuffer[0], RxDataBuffer[1]);
 
 #if 1
             if (tool == E_DAPTOOL_UNKNOWN) {
