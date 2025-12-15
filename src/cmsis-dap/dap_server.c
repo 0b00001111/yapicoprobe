@@ -188,11 +188,13 @@ void dap_task(void *ptr)
  *   As a consequence "disconnect" has to be detected via the command stream.  If the tool on host side
  *   fails without a disconnect, the SWD connection is not freed (for MSC or RTT).  To recover from this
  *   situation either reset the probe or issue something like "pyocd reset -t rp2040"
- * - fingerprinting the host tool: this is for optimization of the OpenOCD connection, because OpenOCD
- *   can handle big DAP packets and thus transfer is faster.
  * - ID_DAP_Disconnect / ID_DAP_Info / ID_DAP_HostStatus leads to an SWD disconnect if there is no other
  *   command following.  This is required, because "pyocd list" leads to tool detection without
  *   connect/disconnect and thus otherwise tool detection would be stuck to "pyocd" for the next connection.
+ * - trying to multiplex between CMSIS-DAP and RTT
+ *   - if there are no DAP commands for a certain time, then dap_task() gives SWD control to RTT
+ *   - pyocd sends every 11ms a command while target is executing, so it is waited if there is a 8ms gap
+ *     in command stream
  */
 {
     dap_packet_count = _DAP_PACKET_COUNT_UNKNOWN;
@@ -200,7 +202,7 @@ void dap_task(void *ptr)
 
     for (;;) {
         EventBits_t ev = xEventGroupWaitBits(dap_events, 0x01, pdTRUE, pdFALSE,
-                                             swd_connected ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(1000));
+                                             swd_connected ? pdMS_TO_TICKS(8) : pdMS_TO_TICKS(1000));
 //        picoprobe_info("vvvv %d\n", xx);
 
         size_t n = xStreamBufferBytesAvailable(dap_stream);
@@ -547,7 +549,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
 
 
-bool dap_connected(void)
+bool dap_is_connected(void)
 {
     bool r = false;
 
@@ -559,7 +561,7 @@ bool dap_connected(void)
 #endif
 
     return r;
-}   // dap_connected
+}   // dap_is_connected
 
 
 
