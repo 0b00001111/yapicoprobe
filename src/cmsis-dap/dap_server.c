@@ -203,7 +203,6 @@ void dap_task(void *ptr)
     for (;;) {
         EventBits_t ev = xEventGroupWaitBits(dap_events, 0x01, pdTRUE, pdFALSE,
                                              swd_connected ? pdMS_TO_TICKS(8) : pdMS_TO_TICKS(1000));
-//        picoprobe_info("vvvv %d\n", xx);
 
         size_t n = xStreamBufferBytesAvailable(dap_stream);
         n = MIN(n, sizeof(RxDataBuffer) - rx_len);
@@ -211,10 +210,12 @@ void dap_task(void *ptr)
         rx_len += n;
         // post: data fetched from stream
 
+#if 1  // EXPERIMENTAL FEATURE
         if (rx_len == 0  &&  ev == 0) {
             if (swd_connected) {
                 //
-                // receive RTT data while debugging if there is no DAP command pending
+                // try to receive RTT data while debugging if there is no DAP command pending
+                // read more in rtt_io_thread()
                 //
                 sw_unlock(E_SWLOCK_DAPV2);
 
@@ -227,6 +228,7 @@ void dap_task(void *ptr)
             }
             continue;
         }
+#endif
 
         for (;;) {
             if (rx_len == 0) {

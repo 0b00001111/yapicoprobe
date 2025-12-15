@@ -147,11 +147,8 @@ static bool rtt_check_control_block_header(uint32_t rtt_cb)
         // -> rtt_cb_header is not yet valid
     }
     else {
-//        printf("..a1 %d\n", ok);
         ok = swd_read_memory(rtt_cb, (uint8_t *)&rtt_cb_header_buf, sizeof(rtt_cb_header_buf));
-//        printf("..a2 %d\n", ok);
         ok = ok  &&  memcmp( &rtt_cb_header, &rtt_cb_header_buf, sizeof(rtt_cb_header_buf)) == 0;
-//        printf("..a3 %d\n", ok);
     }
     return ok;
 }   // rtt_check_control_block_header
@@ -498,7 +495,6 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
     if (dap_is_connected()) {
         xTimerReset(timer_dap_connected, 100);
     }
-//    picoprobe_info("yy %08x %d %d\n", (unsigned int)rtt_cb, with_alive_check, dap_is_connected());
 
     // do operations
     rtt_console_running = true;
@@ -521,8 +517,6 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
             else
 #endif
             {
-//                working_uart = false;
-
                 if (ok_console_from_target)
                     ok = ok  &&  rtt_from_target(&aUpConsole, cdc_uart_write, false, &working_uart);
 
@@ -557,19 +551,15 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
         }
 #endif
 
-//        printf("aa %d %d\n", ok, probe_rtt_cb);
         if (ok  &&  probe_rtt_cb) {
 //            printf("%8x %d %d %d %d %d\n", (unsigned int)rtt_cb, ok, probe_rtt_cb, working_uart, ok_console_from_target, ok_console_to_target);
             // did nothing -> check if RTT channels (dis)appeared
             ok = ok  &&  rtt_check_control_block_header(rtt_cb);
-//            printf("ab %d\n", ok);
 #if OPT_TARGET_UART
             if ( !ok_console_from_target)
                 ok = ok  &&  rtt_check_channel_from_target(rtt_cb, RTT_CHANNEL_CONSOLE, &aUpConsole, &ok_console_from_target);
-//            printf("ac %d\n", ok);
             if ( !ok_console_to_target)
                 ok = ok  &&  rtt_check_channel_to_target(rtt_cb, RTT_CHANNEL_CONSOLE, &aDownConsole, &ok_console_to_target);
-//            printf("ad %d\n", ok);
 #endif
 #if INCLUDE_SYSVIEW
             if ( !ok_sysview_from_target)
@@ -581,23 +571,22 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
             // -> delay
             xEventGroupWaitBits(events, EV_RTT_TO_TARGET, pdTRUE, pdFALSE, pdMS_TO_TICKS(RTT_POLL_INT_MS));
         }
-//        printf("az %d\n", ok);
 
         if (with_alive_check  &&  !rtt_cb_alive  &&  !xTimerIsTimerActive(timer_rtt_cb_verify)) {
             // nothing happens here after some time -> timeout and do a new search
-            picoprobe_info("xx !alive\n");
+//            picoprobe_info("xx !alive\n");
             ok = false;
         }
 
         if (dap_is_connected()) {
             if (sw_unlock_requested()  &&  !xTimerIsTimerActive(timer_dap_connected)) {
-                picoprobe_info("xx DAP timeout\n");
+//                picoprobe_info("xx DAP timeout\n");
                 ok = false;
             }
         }
         else {
             if (sw_unlock_requested()) {
-                picoprobe_info("xx unlock requested\n");
+//                picoprobe_info("xx unlock requested\n");
                 ok = false;
             }
         }
@@ -672,6 +661,26 @@ static void rtt_print_target_info(void)
 
 
 void rtt_io_thread(void *ptr)
+/**
+ * Do RTT input/output for console and SystemView.
+ *
+ * Experimental feature
+ * --------------------
+ * During gaps in the CMSIS-DAP command stream it is tried to continue RTT streaming.  This currently
+ * seems to work for PyOCD but not for OpenOCD.  Because the current code does not search for the RTT_CB,
+ * the regular functions must have a chance to detect it (which is normally no limitation).
+ * PyOCD:
+ * - stops DAP communication after single steps
+ * - during this pause, the probe jumps in and polls RTT communication
+ * OpenOCD:
+ * - even after single steps, OpenOCD continues to poll the target via DAP
+ * - during (small) gaps in the communication the probe tries to do RTT access to the target.
+ *   IT SEEMS THAT READING THE TARGET RESULTS IN NONSENSE, which means that e.g. rtt_check_control_block_header()
+ *   returns !ok.  But sometimes (esp pressing pause during run or longer "step over") access seems to work.
+ *   But this is not reliable.
+ * - nevertheless it seems that debugging is not disturbed
+ * - TODO can OpenOCD behavior be changed via commands to omit polling?
+ */
 {
     uint32_t rtt_cb = 0;
     bool target_online = false;
@@ -680,12 +689,11 @@ void rtt_io_thread(void *ptr)
         sw_lock(E_SWLOCK_RTT);
         // post: we have the interface
 
-#if 1
         if (dap_is_connected()) {
             //
-            // do RTT while debugging until a DAP command arrives
+            // Do RTT while debugging until a DAP command arrives
+            // Note that dap_is_connected() must be caught here, because the code downwards disturbs debugging
             //
-            vTaskDelay(pdMS_TO_TICKS(20));
             do {
                 if ( !is_target_ok(0)) {
                     break;
@@ -695,7 +703,6 @@ void rtt_io_thread(void *ptr)
             sw_unlock(E_SWLOCK_RTT);
             continue;
         }
-#endif
 
         if ( !target_online) {
             if (g_board_info.prerun_board_config != NULL) {
