@@ -29,7 +29,7 @@
 
 #define INCLUDE_RTT_CONSOLE
 
-#if defined(OPT_SERIAL_CRLF)
+#if OPT_SERIAL_CRLF
     #define PROBE_DEBUG_OPT_CR "\r"
 #else
     #define PROBE_DEBUG_OPT_CR ""
