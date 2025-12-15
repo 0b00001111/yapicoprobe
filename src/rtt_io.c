@@ -23,7 +23,6 @@
  *
  */
 
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,6 +69,11 @@ typedef struct {
     SEGGER_RTT_BUFFER_DOWN  aDown;               // local copy of the target aDown[]
 } EXT_SEGGER_RTT_BUFFER_DOWN;
 
+typedef struct {                                                      // see SEGGER_RTT_CB
+    char                    acID[16];                                 // Initialized to "SEGGER RTT"
+//    int                     MaxNumUpBuffers;                          // Initialized to SEGGER_RTT_MAX_NUM_UP_BUFFERS (type. 2)
+//    int                     MaxNumDownBuffers;                        // Initialized to SEGGER_RTT_MAX_NUM_DOWN_BUFFERS (type. 2)
+} EXT_SEGGER_RTT_CB_HEADER;
 
 #define TARGET_RAM_START        g_board_info.target_cfg->ram_regions[0].start
 #define TARGET_RAM_END          g_board_info.target_cfg->ram_regions[0].end
@@ -86,6 +90,7 @@ typedef struct {
 
 static const uint32_t           segger_alignment = 4;
 static const uint8_t            seggerRTT[16] = "SEGGER RTT\0\0\0\0\0\0";
+static EXT_SEGGER_RTT_CB_HEADER rtt_cb_header = {0};
 static bool                     rtt_console_running = false;
 static bool                     rtt_cb_alive = false;
 static bool                     ok_console_from_target = false;
@@ -119,6 +124,7 @@ static uint32_t check_buffer_for_rtt_cb(uint8_t *buf, uint32_t buf_size, uint32_
 
     for (uint32_t ndx = 0;  ndx <= buf_size - sizeof(seggerRTT);  ndx += segger_alignment) {
         if (memcmp(buf + ndx, seggerRTT, sizeof(seggerRTT)) == 0) {
+            memcpy( &rtt_cb_header, buf + ndx, sizeof(rtt_cb_header));
             rtt_cb = base_addr + ndx;
             break;
         }
@@ -156,7 +162,7 @@ static uint32_t search_for_rtt_cb(uint32_t prev_rtt_cb)
     uint32_t rtt_cb = 0;
 
     // check parameter
-    if (prev_rtt_cb > TARGET_RAM_END - sizeof(seggerRTT)) {
+    if ((prev_rtt_cb != 0  &&  prev_rtt_cb < TARGET_RAM_START)  ||  prev_rtt_cb > TARGET_RAM_END - sizeof(seggerRTT)) {
         return 0;
     }
 
@@ -185,6 +191,18 @@ static uint32_t search_for_rtt_cb(uint32_t prev_rtt_cb)
     }
     return rtt_cb;
 }   // search_for_rtt_cb
+
+
+
+static bool rtt_check_control_block_header(uint32_t rtt_cb)
+{
+    bool ok;
+    EXT_SEGGER_RTT_CB_HEADER rtt_cb_header_buf;
+
+    ok = swd_read_memory(rtt_cb, (uint8_t *)&rtt_cb_header_buf, sizeof(rtt_cb_header_buf));
+    ok = ok  &&  memcmp( &rtt_cb_header, &rtt_cb_header_buf, sizeof(rtt_cb_header_buf)) == 0;
+    return ok;
+}   // rtt_check_control_block_header
 
 
 
@@ -446,6 +464,7 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
     EXT_SEGGER_RTT_BUFFER_DOWN aDownConsole;     // Down buffer, transferring information from host via debug probe to target
     ok_console_from_target = false;
     ok_console_to_target = false;
+    bool working_uart = false;
 #endif
 #if INCLUDE_SYSVIEW
     EXT_SEGGER_RTT_BUFFER_UP   aUpSysView;       // Up buffer, transferring information up from target via debug probe to host
@@ -453,6 +472,7 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
     bool ok_sysview_from_target = false;
     bool ok_sysview_to_target = false;
     bool net_sysview_was_connected = false;
+    bool working_sysview = false;
 #endif
     bool ok = true;
 
@@ -476,7 +496,6 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
 #if OPT_TARGET_UART
         {
             static TickType_t lastTimeWorked;
-            bool working_uart = false;
 
             if ( !working_uart  &&  xTaskGetTickCount() - lastTimeWorked < pdMS_TO_TICKS(RTT_CONSOLE_POLL_INT_MS)) {
                 //
@@ -501,8 +520,6 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
 
 #if INCLUDE_SYSVIEW
         if (net_sysview_is_connected()) {
-            bool working_sysview = false;
-
             if ( !net_sysview_was_connected) {
                 net_sysview_was_connected = true;
                 rtt_from_target_reset(&aUpSysView);
@@ -523,6 +540,7 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
         //printf("%d %d\n", ok, probe_rtt_cb);
         if (ok  &&  probe_rtt_cb) {
             // did nothing -> check if RTT channels appeared
+            ok = ok  &&  rtt_check_control_block_header(rtt_cb);
 #if OPT_TARGET_UART
             if ( !ok_console_from_target)
                 ok = ok  &&  rtt_check_channel_from_target(rtt_cb, RTT_CHANNEL_CONSOLE, &aUpConsole, &ok_console_from_target);
