@@ -316,7 +316,7 @@ void dap_task(void *ptr)
                         led_state(LS_DAPV2_CONNECTED);
                     }
                     else {
-                        // very obscure... did not get lock!
+                        // TODO very obscure... did not get lock!
                         // happens with "probe-rs info", see https://github.com/rgrr/yapicoprobe/issues/162
                         // if we do not execute the command here, then the whole probe stucks (forever)
                         uint32_t resp_len;
