@@ -388,10 +388,13 @@ void usb_thread(void *ptr)
     vTaskCoreAffinitySet(tud_taskhandle, 1);
 #endif
 
+#if 0
+    // TODO is this really required?  rtt_io does this periodically
     // do a first initialization, dynamic target detection is done in rtt_console
     if (g_board_info.prerun_board_config != NULL) {
         g_board_info.prerun_board_config();
     }
+#endif
 
 #if OPT_TARGET_UART
     cdc_uart_init(UART_TASK_PRIO);

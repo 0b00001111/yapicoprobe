@@ -92,7 +92,6 @@ static const uint32_t           segger_alignment = 4;
 static const uint8_t            seggerRTT[16] = "SEGGER RTT\0\0\0\0\0\0";
 static EXT_SEGGER_RTT_CB_HEADER rtt_cb_header = {0};
 static bool                     rtt_console_running = false;
-static bool                     rtt_cb_alive = false;
 static bool                     ok_console_from_target = false;
 static bool                     ok_console_to_target = false;
 
@@ -100,8 +99,7 @@ static TaskHandle_t             task_rtt_console = NULL;
 static TaskHandle_t             task_rtt_from_target_thread = NULL;
 static StreamBufferHandle_t     stream_rtt_console_to_target;                  // small stream for host->probe->target console communication
 static EventGroupHandle_t       events;
-static TimerHandle_t            timer_rtt_cb_verify;
-static TimerHandle_t            timer_dap_connected;
+static TimerHandle_t            timer_rtt_dap_interleave;                      // minimum time do_rtt_io() should be active if DAP connected
 
 #if INCLUDE_SYSVIEW
     #define RTT_CHANNEL_SYSVIEW 1
@@ -184,7 +182,7 @@ static uint32_t search_for_rtt_cb(uint32_t prev_rtt_cb)
 
     // check parameter
     if ((prev_rtt_cb != 0  &&  prev_rtt_cb < TARGET_RAM_START)  ||  prev_rtt_cb > TARGET_RAM_END - sizeof(EXT_SEGGER_RTT_CB_HEADER)) {
-        return 0;
+        prev_rtt_cb = 0;
     }
 
     // fast search, saves a little SW traffic and a few ms
@@ -230,7 +228,7 @@ static bool rtt_check_channel_from_target(uint32_t rtt_cb, uint16_t channel, EXT
         *found = *found  &&  (extRttBuf->aUp.SizeOfBuffer > 0  &&  extRttBuf->aUp.SizeOfBuffer < TARGET_RAM_END - TARGET_RAM_START);
         *found = *found  &&  ((uint32_t)extRttBuf->aUp.pBuffer >= TARGET_RAM_START  &&  (uint32_t)extRttBuf->aUp.pBuffer + extRttBuf->aUp.SizeOfBuffer <= TARGET_RAM_END);
         if (*found) {
-            picoprobe_info("     rtt_check_channel_from_target: %u %p %5u %5u %5u\n", channel, extRttBuf->aUp.pBuffer, extRttBuf->aUp.SizeOfBuffer, extRttBuf->aUp.RdOff, extRttBuf->aUp.WrOff);
+            picoprobe_debug("     rtt_check_channel_from_target: %u %p %5u %5u %5u\n", channel, extRttBuf->aUp.pBuffer, extRttBuf->aUp.SizeOfBuffer, extRttBuf->aUp.RdOff, extRttBuf->aUp.WrOff);
         }
     }
     return ok;
@@ -260,7 +258,7 @@ static bool rtt_check_channel_to_target(uint32_t rtt_cb, uint16_t channel, EXT_S
         *found = *found  &&  (extRttBuf->aDown.SizeOfBuffer > 0  &&  extRttBuf->aDown.SizeOfBuffer < TARGET_RAM_END - TARGET_RAM_START);
         *found = *found  &&  ((uint32_t)extRttBuf->aDown.pBuffer >= TARGET_RAM_START  &&  (uint32_t)extRttBuf->aDown.pBuffer + extRttBuf->aDown.SizeOfBuffer <= TARGET_RAM_END);
         if (*found) {
-            picoprobe_info("     rtt_check_channel_to_target  : %u %p %5u %5u %5u\n", channel, extRttBuf->aDown.pBuffer, extRttBuf->aDown.SizeOfBuffer, extRttBuf->aDown.RdOff, extRttBuf->aDown.WrOff);
+            picoprobe_debug("     rtt_check_channel_to_target  : %u %p %5u %5u %5u\n", channel, extRttBuf->aDown.pBuffer, extRttBuf->aDown.SizeOfBuffer, extRttBuf->aDown.RdOff, extRttBuf->aDown.WrOff);
         }
     }
     return ok;
@@ -330,8 +328,6 @@ static void rtt_from_target_thread(void *p)
             ft_ok = ft_ok  &&  swd_read_memory((uint32_t)ft_extRttBuf->aUp.pBuffer + ft_extRttBuf->aUp.RdOff, ft_buf, ft_cnt);
             ft_extRttBuf->aUp.RdOff = (ft_extRttBuf->aUp.RdOff + ft_cnt) % ft_extRttBuf->aUp.SizeOfBuffer;
             ft_ok = ft_ok  &&  swd_write_word(ft_extRttBuf->addr + offsetof(SEGGER_RTT_BUFFER_UP, RdOff), ft_extRttBuf->aUp.RdOff);
-
-            rtt_cb_alive = true;
         }
         else {
             ft_cnt = 0;
@@ -464,7 +460,10 @@ static bool rtt_to_target(EXT_SEGGER_RTT_BUFFER_DOWN *extRttBuf, StreamBufferHan
 
 
 
-static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
+static void do_rtt_io(uint32_t rtt_cb)
+/**
+ * Do RTT IO until either the RTT_CB is lost or if there is another SWD request.
+ */
 {
 #if OPT_TARGET_UART
     EXT_SEGGER_RTT_BUFFER_UP   aUpConsole;       // Up buffer, transferring information up from target via debug probe to host
@@ -482,18 +481,12 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
     bool working_sysview = false;
 #endif
     bool ok;
+    bool dap_connected_first_round = true;
 
     static_assert(sizeof(uint32_t) == sizeof(unsigned int), "uint32_t/unsigned int mix up");    // why doesn't segger use uint32_t?
 
     if (rtt_cb < TARGET_RAM_START  ||  rtt_cb > TARGET_RAM_END - sizeof(EXT_SEGGER_RTT_CB_HEADER)) {
         return;
-    }
-
-    if (with_alive_check) {
-        xTimerReset(timer_rtt_cb_verify, 100);
-    }
-    if (dap_is_connected()) {
-        xTimerReset(timer_dap_connected, 100);
     }
 
     // do operations
@@ -517,6 +510,8 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
             else
 #endif
             {
+                working_uart = false;
+
                 if (ok_console_from_target)
                     ok = ok  &&  rtt_from_target(&aUpConsole, cdc_uart_write, false, &working_uart);
 
@@ -538,6 +533,9 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
                 net_sysview_was_connected = true;
                 rtt_from_target_reset(&aUpSysView);
             }
+
+            working_sysview = false;
+
             if (ok_sysview_from_target)
                 ok = ok  &&  rtt_from_target(&aUpSysView, net_sysview_send, true, &working_sysview);
 
@@ -555,6 +553,7 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
 //            printf("%8x %d %d %d %d %d\n", (unsigned int)rtt_cb, ok, probe_rtt_cb, working_uart, ok_console_from_target, ok_console_to_target);
             // did nothing -> check if RTT channels (dis)appeared
             ok = ok  &&  rtt_check_control_block_header(rtt_cb);
+//            printf("xx %d\n", ok);
 #if OPT_TARGET_UART
             if ( !ok_console_from_target)
                 ok = ok  &&  rtt_check_channel_from_target(rtt_cb, RTT_CHANNEL_CONSOLE, &aUpConsole, &ok_console_from_target);
@@ -568,19 +567,19 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
                 ok = ok  &&  rtt_check_channel_to_target(rtt_cb, RTT_CHANNEL_SYSVIEW, &aDownSysView, &ok_sysview_to_target);
 #endif
 
-            // -> delay
-            xEventGroupWaitBits(events, EV_RTT_TO_TARGET, pdTRUE, pdFALSE, pdMS_TO_TICKS(RTT_POLL_INT_MS));
-        }
-
-        if (with_alive_check  &&  !rtt_cb_alive  &&  !xTimerIsTimerActive(timer_rtt_cb_verify)) {
-            // nothing happens here after some time -> timeout and do a new search
-//            picoprobe_info("xx !alive\n");
-            ok = false;
+            if ( !dap_is_connected()) {
+                // -> delay (TODO what is it good for?)
+                xEventGroupWaitBits(events, EV_RTT_TO_TARGET, pdTRUE, pdFALSE, pdMS_TO_TICKS(RTT_POLL_INT_MS));
+            }
         }
 
         if (dap_is_connected()) {
-            if (sw_unlock_requested()  &&  !xTimerIsTimerActive(timer_dap_connected)) {
-//                picoprobe_info("xx DAP timeout\n");
+            if (dap_connected_first_round) {
+                dap_connected_first_round = false;
+                xTimerReset(timer_rtt_dap_interleave, 100);
+            }
+            else if (sw_unlock_requested()  &&  !xTimerIsTimerActive(timer_rtt_dap_interleave)) {
+//                picoprobe_info("xx DAP timeout %d %d\n", sw_unlock_requested(), !xTimerIsTimerActive(timer_rtt_dap_interleave));
                 ok = false;
             }
         }
@@ -591,9 +590,9 @@ static void do_rtt_io(uint32_t rtt_cb, bool with_alive_check)
             }
         }
     }
+//    printf("ee\n");
     rtt_console_running = false;
-    xTimerStop(timer_rtt_cb_verify, 100);
-    xTimerStop(timer_dap_connected, 100);
+    xTimerStop(timer_rtt_dap_interleave, 100);
 }   // do_rtt_io
 
 
@@ -640,7 +639,7 @@ static void rtt_print_target_info(void)
     }
     else
     {
-        picoprobe_info("Flash             : 0x%08x.. 0x%08x (%uK)\n",
+        picoprobe_info("Flash             : 0x%08x..0x%08x (%uK)\n",
                       (unsigned)g_board_info.target_cfg->flash_regions[0]. start,
                       (unsigned)(g_board_info.target_cfg->flash_regions[0]. end - 1),
                       (unsigned)((g_board_info.target_cfg->flash_regions[0]. end -
@@ -653,7 +652,7 @@ static void rtt_print_target_info(void)
                   (unsigned)((g_board_info.target_cfg->ram_regions[0].end -
                              g_board_info.target_cfg->ram_regions[0]. start) / 1024));
     picoprobe_info("SWD frequency     : %ukHz\n", (unsigned)probe_get_swclk_freq_khz());
-    picoprobe_info("SWD max frequency :  %ukHz\n", g_board_info.target_cfg->rt_max_swd_khz);
+    picoprobe_info("SWD max frequency : %ukHz\n", g_board_info.target_cfg->rt_max_swd_khz);
     picoprobe_info("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
     picoprobe_info("\n");
 }   // rtt_print_target_info
@@ -667,8 +666,7 @@ void rtt_io_thread(void *ptr)
  * Experimental feature
  * --------------------
  * During gaps in the CMSIS-DAP command stream it is tried to continue RTT streaming.  This currently
- * seems to work for PyOCD but not for OpenOCD.  Because the current code does not search for the RTT_CB,
- * the regular functions must have a chance to detect it (which is normally no limitation).
+ * seems to work for PyOCD but not for OpenOCD.
  * PyOCD:
  * - stops DAP communication after single steps
  * - during this pause, the probe jumps in and polls RTT communication
@@ -682,28 +680,10 @@ void rtt_io_thread(void *ptr)
  * - TODO can OpenOCD behavior be changed via commands to omit polling?
  */
 {
-    uint32_t rtt_cb = 0;
+    static uint32_t rtt_cb = 0;
     bool target_online = false;
 
     for (;;) {
-        sw_lock(E_SWLOCK_RTT);
-        // post: we have the interface
-
-        if (dap_is_connected()) {
-            //
-            // Do RTT while debugging until a DAP command arrives
-            // Note that dap_is_connected() must be caught here, because the code downwards disturbs debugging
-            //
-            do {
-                if ( !is_target_ok(0)) {
-                    break;
-                }
-                do_rtt_io(rtt_cb, false);
-            } while ( !sw_unlock_requested());
-            sw_unlock(E_SWLOCK_RTT);
-            continue;
-        }
-
         if ( !target_online) {
             if (g_board_info.prerun_board_config != NULL) {
                 g_board_info.prerun_board_config();
@@ -713,6 +693,43 @@ void rtt_io_thread(void *ptr)
             }
         }
 
+        sw_lock(E_SWLOCK_RTT);
+        // post: we have the interface
+
+#if OPT_RTT_WHILE_DEBUGGING  // EXPERIMENTAL FEATURE
+        if (dap_is_connected()) {
+            //
+            // Do RTT while debugging until a DAP command arrives
+            // Note that dap_is_connected() must be caught here, because the code downwards disturbs debugging
+            //
+            uint32_t prev_rtt_cb = rtt_cb;
+
+            do {
+                rtt_cb = search_for_rtt_cb(rtt_cb);
+
+                if (rtt_cb == 0  &&  prev_rtt_cb != 0) {
+                    picoprobe_info("---- RTT_CB lost (RTT during debug)\n");
+                }
+                else if (rtt_cb != 0  &&  rtt_cb != prev_rtt_cb) {
+                    // RTT_CB found
+                    picoprobe_info("---- RTT_CB found at 0x%x (RTT during debug)\n", (unsigned)rtt_cb);
+                    prev_rtt_cb = rtt_cb;
+                }
+
+                do_rtt_io(rtt_cb);
+            } while ( !sw_unlock_requested()  &&  is_target_ok(0));
+            sw_unlock(E_SWLOCK_RTT);
+            continue;
+        }
+#else
+        if (dap_is_connected()) {
+            picoprobe_error("RTT WHILE DEBUGGING SEEMS TO BE DISABLED.  WE SHOULD NEVER ARRIVEE HERE.\n");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            sw_unlock(E_SWLOCK_RTT);
+            continue;
+        }
+#endif
+
         vTaskDelay(pdMS_TO_TICKS(100));            // give the target some time for startup
         if ( !target_connect()) {
             led_state(LS_NO_TARGET);
@@ -721,58 +738,34 @@ void rtt_io_thread(void *ptr)
                 target_online = false;
                 picoprobe_info("=================================== Target lost\n");
             }
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(900));
         }
         else {
-            // search for an alive RTT_CB
             //
-            // TODO this loop is much too complicated!
+            // search for RTT_CB
             //
-            uint32_t rtt_cb_cnt = 99;
-
             picoprobe_info("searching RTT_CB in 0x%08x..0x%08x, prev: 0x%08x\n",
                            (unsigned)TARGET_RAM_START, (unsigned)(TARGET_RAM_END - 1), (unsigned)rtt_cb);
             led_state(LS_TARGET_FOUND);
             target_online = true;
-            rtt_cb_alive = false;
-            rtt_cb = search_for_rtt_cb(rtt_cb);               // either verify previous RTT_CB or search for one
-            while ( !sw_unlock_requested()  &&  is_target_ok(0)) {
-                if (rtt_cb == 0) {
-                    rtt_cb = search_for_rtt_cb(0);
-                    if (rtt_cb == 0) {
-                        // -> no RTT_CB in memory, wait until unlock requested
-                        picoprobe_info("---- no RTT_CB found\n");
-                        led_state(LS_TARGET_FOUND);
-                        while ( !sw_unlock_requested()  &&  is_target_ok(0)) {
-                            vTaskDelay(pdMS_TO_TICKS(100));
-                        }
-                        break;
-                    }
-                }
-                if (rtt_cb != 0) {
-                    picoprobe_info("---- RTT_CB found at 0x%x\n", (unsigned)rtt_cb);
-                    ++rtt_cb_cnt;
-                    led_state(LS_RTT_CB_FOUND);
-                    do_rtt_io(rtt_cb, true);
 
-                    if ( !rtt_cb_alive) {
-                        uint32_t prev_rtt_cb = rtt_cb;
-                        picoprobe_info("---- RTT_CB at 0x%x seems to be inactive, searching again...\n", (unsigned)rtt_cb);
-                        rtt_cb = search_for_rtt_cb(rtt_cb + segger_alignment);
-                        if (rtt_cb == 0) {
-                            if (rtt_cb_cnt == 1) {
-                                rtt_cb = prev_rtt_cb;
-                                picoprobe_info("---- Only one RTT_CB in memory.  Sticking to it even if inactive.\n");
-                                do_rtt_io(rtt_cb, false);
-                            }
-                            rtt_cb_cnt = 0;
-                        }
-                    }
-                }
+            rtt_cb = search_for_rtt_cb(rtt_cb);               // either verify previous RTT_CB or search for one
+            if (rtt_cb == 0)
+            {
+                // -> no RTT_CB in memory
+                picoprobe_info("---- no RTT_CB found\n");
+                led_state(LS_TARGET_FOUND);
+                vTaskDelay(pdMS_TO_TICKS(900));
+            }
+            else
+            {
+                // RTT_CB found
+                picoprobe_info("---- RTT_CB found at 0x%x\n", (unsigned)rtt_cb);
+                led_state(LS_RTT_CB_FOUND);
+                do_rtt_io(rtt_cb);
             }
 
             target_disconnect();
-            vTaskDelay(pdMS_TO_TICKS(200));        // some guard time after disconnect
         }
         sw_unlock(E_SWLOCK_RTT);
         vTaskDelay(pdMS_TO_TICKS(100));            // give the other task the opportunity to catch sw_lock();
@@ -853,8 +846,8 @@ void rtt_console_init(uint32_t task_prio)
     }
 #endif
 
-    timer_rtt_cb_verify = xTimerCreate("RTT_CB verify timeout", pdMS_TO_TICKS(1000), pdFALSE, NULL, rtt_cb_verify_timeout);
-    timer_dap_connected = xTimerCreate("RTT DAP connected timeout", pdMS_TO_TICKS(100), pdFALSE, NULL, rtt_cb_verify_timeout);
+    // TODO rtt_io needs 20ms to pull console while DAP is active (this is actually too long and during debugging it could be set to 5ms!?)
+    timer_rtt_dap_interleave = xTimerCreate("RTT/DAP interleave timeout", pdMS_TO_TICKS(20), pdFALSE, NULL, rtt_cb_verify_timeout);
 
     xTaskCreate(rtt_io_thread, "RTT-IO", configMINIMAL_STACK_SIZE, NULL, task_prio, &task_rtt_console);
     if (task_rtt_console == NULL)
