@@ -515,8 +515,8 @@ static void do_rtt_io(uint32_t rtt_cb)
                 if (ok_console_from_target)
                     ok = ok  &&  rtt_from_target(&aUpConsole, cdc_uart_write, false, &working_uart);
 
-//                if (ok_console_to_target)
-//                    ok = ok  &&  rtt_to_target(&aDownConsole, stream_rtt_console_to_target, &working_uart);
+                if (ok_console_to_target)
+                    ok = ok  &&  rtt_to_target(&aDownConsole, stream_rtt_console_to_target, &working_uart);
 
                 probe_rtt_cb = probe_rtt_cb  &&  !working_uart;
 
