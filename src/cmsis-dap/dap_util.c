@@ -418,10 +418,8 @@ daptool_t DAP_FingerprintTool(const uint8_t *request, uint32_t request_len)
         probed_tool = E_DAPTOOL_UNKNOWN;
         return probed_tool;
     }
-    if (request[0] != ID_DAP_Info) {
-//        picoprobe_info("fingerprintxx: %d %02x %02x %d\n", sample_no, request[0], request[1], probed_tool);
-        sample_no = 0;
-        probed_tool = E_DAPTOOL_UNKNOWN;
+    if (request[0] != ID_DAP_Info  ||  probed_tool != E_DAPTOOL_UNKNOWN) {
+        // return stored tool
         return probed_tool;
     }
 
