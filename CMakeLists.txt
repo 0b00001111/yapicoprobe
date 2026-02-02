@@ -456,6 +456,7 @@ target_include_directories(${PROJECT} PRIVATE src)
 target_compile_definitions (${PROJECT} PRIVATE
 	PICO_RP2040_USB_DEVICE_ENUMERATION_FIX=1
 	PICO_RP2040_USB_DEVICE_UFRAME_FIX=1
+	PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64  # Fix for rp2040-zero board, 64 is maximum value found in board definitions in SDK
 )
 
 target_link_libraries(${PROJECT} PRIVATE
