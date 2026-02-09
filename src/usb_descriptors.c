@@ -81,7 +81,7 @@ tusb_desc_device_t const desc_device =
 
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
-    .idVendor           = 0x2E8A, // Pi
+    .idVendor           = 0x2E8A, // Pi                 // officially we also have 0x1209:0x6404, see https://github.com/pidcodes/pidcodes.github.com/pull/1145
     .idProduct          = 0x000c, // CMSIS-DAP adapter
     .bcdDevice          = (PICOPROBE_VERSION_MAJOR << 8) + (16*PICOPROBE_VERSION_MINOR) + PICOPROBE_VERSION_PATCH,
     .iManufacturer      = STRID_MANUFACTURER,
