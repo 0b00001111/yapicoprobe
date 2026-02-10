@@ -275,6 +275,15 @@ debuggEE-reset-probe-rs:
 
 .PHONY: cmake-create-debuggEE
 cmake-create-debuggEE: clean-build-debuggEE
+	cmake -B $(BUILDEE_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=$(PICO_BOARD)                               \
+	         $(CMAKE_FLAGS)                                                                                            \
+ 	         -DPICO_CLIB=$(DEBUGGEE_CLIB)                                                                              \
+	         -DOPT_NET= -DOPT_PROBE_DEBUG_OUT=RTT                                                                      \
+	         -DOPT_SIGROK=0 -DOPT_MSC=0 -DOPT_CMSIS_DAPV1=0 -DOPT_CMSIS_DAPV2=0 -DOPT_TARGET_UART=1
+
+
+.PHONY: cmake-create-debuggEE-clang
+cmake-create-debuggEE-clang: clean-build-debuggEE
 	export PICO_TOOLCHAIN_PATH=~/bin/llvm-arm-none-eabi/bin;                                                           \
 	cmake -B $(BUILDEE_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=$(PICO_BOARD)                               \
 	         $(CMAKE_FLAGS)                                                                                            \
