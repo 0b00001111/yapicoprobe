@@ -131,8 +131,12 @@ cmake-create-minsizerel-clang: clean-build
 	         $(CMAKE_FLAGS) 
 
 
+.PHONY: bootsel
+bootsel:
+	@-stty -F /dev/ttyPicoProbe 1200
+
 .PHONY: flash
-flash: all
+flash: bootsel all
 	@echo "Waiting for RPi bootloader..."
 	@until [ -f /media/pico/INDEX.HTM ]; do sleep 0.1; done; echo "ready!"
 	cp $(BUILD_DIR)/$(PROJECT).uf2 /media/pico
