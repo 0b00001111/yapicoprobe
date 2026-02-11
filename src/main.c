@@ -103,6 +103,7 @@
 
 #if CFG_TUD_CDC
     #include "pico/bootrom.h"
+    #include "hardware/watchdog.h"
 #endif
 
 #ifdef NDEBUG
@@ -192,6 +193,10 @@ void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* line_coding)
     if (line_coding->bit_rate == 1200) {
         // restart into BOOTSEL mode
         reset_usb_boot(0, 0);
+    }
+    else if (line_coding->bit_rate == 2400) {
+        // restart into BOOTSEL mode
+        watchdog_reboot(0, 0, 0);
     }
 }   // tud_cdc_line_coding_cb
 #endif
