@@ -4,7 +4,7 @@
 #
 VERSION_MAJOR        := 2
 VERSION_MINOR        := 2
-VERSION_PATCH        := 2
+VERSION_PATCH        := 3
 
 BUILD_DIR            := _build
 BUILDEE_DIR          := _buildee

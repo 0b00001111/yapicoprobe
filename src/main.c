@@ -195,7 +195,7 @@ void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* line_coding)
         reset_usb_boot(0, 0);
     }
     else if (line_coding->bit_rate == 2400) {
-        // restart into BOOTSEL mode
+        // restart probe
         watchdog_reboot(0, 0, 0);
     }
 }   // tud_cdc_line_coding_cb
